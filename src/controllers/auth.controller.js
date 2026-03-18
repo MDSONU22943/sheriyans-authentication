@@ -3,6 +3,9 @@ import crypto from "crypto"
 import jwt from "jsonwebtoken"
 import config from "../config/config.js"
 import sessionModel from "../models/session.model.js";
+import { sendEmail } from "../services/email.service.js";
+import {generateOtp, getOtpHtml} from "../utils/utils.js"
+import otpModel from '../models/otp.model.js';
 
 export async function register(req,res){
     const {username, email, password} = req.body;
@@ -46,12 +49,23 @@ export async function register(req,res){
         maxAge: 7 * 24 * 60 * 60 * 1000
     })
 
-    console.log(accessToken==refreshToken)
+    // console.log(accessToken==refreshToken)
+    const otp=generateOtp()
+    const html=getOtpHtml(otp)
+    const otpHash=crypto.createHash("sha256").update(otp).digest("hex")
+    await otpModel.create({email:user.email, user:user._id, otpHash})
+
+    await sendEmail(user.email, "OTP Verification",`Your otp code is ${otp}`, html)
+
     return res.status(201).json({
         success: true,
         message: "User registered successfully",
-        user,
-        accessToken: accessToken
+        user:{
+            username:user.username,
+            email:user.email,
+            verified:user.verified
+        },
+        
     })
 }
 
@@ -196,6 +210,13 @@ export async function login(req,res){
         })
     }
 
+    if(!user.verified){
+        return res.status(401).json({
+            success: false,
+            message: "Email not verified"
+        })
+    }
+
     const hashedPassword = crypto.createHash("sha256").update(password).digest("hex")
 
     if(hashedPassword !== user.password){
@@ -225,5 +246,37 @@ export async function login(req,res){
         message: "Logged in successfully",
         accessToken
     })
+
+}
+
+export async function verifyEmail(req,res){
+    const {email, otp} = req.body
+
+    const otpHash = crypto.createHash("sha256").update(otp).digest("hex")
+
+    const otpDoc = await otpModel.findOne({email, otpHash})
+
+    if(!otpDoc){
+        return res.status(400).json({
+            success: false,
+            message: "Invalid OTP"
+        })
+    }
+
+    
+
+    const user=await userModel.findByIdAndDelete(otpDoc.user,{verified:true})
+
+    await otpModel.deleteMany({user: otpDoc.user})
+
+    return res.status(200).json({
+        message: "Email verified successfully",
+        user:{
+            username:user.username,
+            email:user.email,
+            verified:user.verified
+        }
+    })
+
 
 }
